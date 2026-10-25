@@ -103,7 +103,11 @@
 
         // 開放權限通道，防止被瀏覽器 GATT 阻擋
         bluetoothDevice = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
+          filters: [
+            { namePrefix: "Pybricks" },
+            { namePrefix: "SPIKE" },
+            { services: [PYBRICKS_SERVICE_UUID] }
+          ],
           optionalServices: [
             PYBRICKS_SERVICE_UUID,
             NUS_SERVICE_UUID,
