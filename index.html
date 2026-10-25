@@ -32,10 +32,12 @@
     .unit { font-size: min(8vw, 8vh); font-weight: 700; color: #64748b; margin-left: 10px; }
     #connectBtn {
       background: #2563eb; color: #ffffff; border: 2px solid #3b82f6;
-      padding: 12px 30px; font-size: 18px; font-weight: bold;
+      padding: 14px 36px; font-size: 18px; font-weight: bold;
       border-radius: 40px; cursor: pointer;
+      box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4);
     }
-    /* 黑色監聽黑盒子 */
+    #connectBtn:active { transform: scale(0.96); background: #1d4ed8; }
+    /* 黑色監控黑盒子 */
     #monitorBox {
       width: 95%; max-width: 600px; height: 130px;
       background: #111827; border: 1px solid #374151;
@@ -49,19 +51,20 @@
 <body>
 
   <div class="app-wrapper">
-    <div id="statusText">點擊下方按鈕開始連線</div>
+    <div id="statusText">請點擊下方按鈕開始連線</div>
 
     <div class="display-container">
       <span id="distVal">--.-</span>
       <span class="unit">cm</span>
     </div>
 
-    <!-- 黑色監聽黑盒子 -->
+    <!-- 監控視窗 -->
     <div id="monitorBox">
-      <div style="color: #9ca3af;">[監聽黑盒子] 待命中，尚未連線...</div>
+      <div style="color: #9ca3af;">[系統狀態] 頁面載入完成，等待點擊連線...</div>
     </div>
 
-    <button id="connectBtn" type="button" onclick="handleConnect()">連線 SPIKE 藍牙</button>
+    <!-- 不在標籤上寫 onclick，改用標準 id 綁定 -->
+    <button id="connectBtn" type="button">連線 SPIKE 藍牙</button>
   </div>
 
   <script>
@@ -70,78 +73,4 @@
     let bluetoothDevice = null;
     let targetChar = null;
     let isPolling = false;
-    let packetCount = 0;
-    let rxBuffer = "";
-
-    function addLog(text, color = "#a7f3d0") {
-      const box = document.getElementById("monitorBox");
-      const item = document.createElement("div");
-      item.className = "log-item";
-      item.style.color = color;
-      item.innerText = `[#${packetCount}] ${text}`;
-      box.insertBefore(item, box.firstChild);
-      if (box.children.length > 25) box.removeChild(box.lastChild);
-    }
-
-    async function handleConnect() {
-      const status = document.getElementById("statusText");
-      const btn = document.getElementById("connectBtn");
-
-      if (!navigator.bluetooth) {
-        alert("瀏覽器未支援 Web Bluetooth，請確認使用 HTTPS 與 Chrome/Edge/Bluefy");
-        return;
-      }
-
-      try {
-        status.innerText = "搜尋 SPIKE Hub 中...";
-        addLog("正在開啟藍牙搜尋視窗...", "#38bdf8");
-
-        bluetoothDevice = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: [PYBRICKS_SERVICE_UUID, "generic_access"]
-        });
-
-        status.innerText = `連接中：${bluetoothDevice.name || "Hub"}...`;
-        addLog(`已選取裝置：${bluetoothDevice.name}，正在建立 GATT 連線...`);
-
-        bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
-
-        const server = await bluetoothDevice.gatt.connect();
-        addLog("✅ GATT 連線成功！正在搜尋可用通道...");
-
-        const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
-        const characteristics = await service.getCharacteristics();
-
-        addLog(`找到 ${characteristics.length} 個特徵值通道`);
-
-        // 自動找出支援「讀取 (Read)」或「通知 (Notify)」的特徵值
-        for (const char of characteristics) {
-          addLog(`通道 UUID: ${char.uuid.substring(0, 8)}... (Read: ${char.properties.read}, Notify: ${char.properties.notify})`);
-          if (char.properties.read || char.properties.notify) {
-            targetChar = char;
-          }
-        }
-
-        if (!targetChar) {
-          throw new Error("找不到可通訊的特徵值通道");
-        }
-
-        status.innerText = "✅ 連線就緒！請按一下 Hub 中央鍵啟動測距";
-        btn.innerText = "已連線（即時輪詢中）";
-        btn.style.background = "#10b981";
-
-        // 啟動主動輪詢讀取循環 (每 80ms 讀取一次，完全避開 Not supported 錯誤)
-        isPolling = true;
-        startPolling();
-
-      } catch (err) {
-        status.innerText = "連線失敗: " + err.message;
-        addLog("連線發生錯誤：" + err.message, "#f87171");
-        console.error("連線錯誤：", err);
-      }
-    }
-
-    // 主動讀取循環（絕不依賴 startNotifications）
-    async function startPolling() {
-      while (isPolling && targetChar) {
-        try {
+    let packetCount = 0
