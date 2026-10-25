@@ -44,7 +44,7 @@
       font-size: min(42vw, 36vh);
       font-weight: 900;
       line-height: 1;
-      color: #00e676; /* 正常綠色 */
+      color: #00e676;
       font-variant-numeric: tabular-nums;
       transition: color 0.1s ease;
     }
@@ -86,12 +86,15 @@
   </div>
 
   <script>
-    // 定義 Pybricks 原生與常見藍牙服務 UUID
+    // Pybricks 專屬服務與 Nordic UART 服務 UUID
     const PYBRICKS_SERVICE_UUID = "c5f50001-8280-46da-89f4-6d8051e4aeef";
     const PYBRICKS_EVENT_CHAR_UUID = "c5f50003-8280-46da-89f4-6d8051e4aeef";
+
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const NUS_TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
     let bluetoothDevice = null;
+    let rxBuffer = "";
 
     async function toggleScan() {
       const btn = document.getElementById("connectBtn");
@@ -101,12 +104,13 @@
         status.innerText = "正在搜尋附近的 SPIKE Hub...";
         btn.innerText = "搜尋配對中...";
 
-        // 開放權限通道，防止被瀏覽器 GATT 阻擋
+        // 同時相容 iPad Bluefy 與電腦 Chrome
         bluetoothDevice = await navigator.bluetooth.requestDevice({
           filters: [
             { namePrefix: "Pybricks" },
             { namePrefix: "SPIKE" },
-            { services: [PYBRICKS_SERVICE_UUID] }
+            { services: [PYBRICKS_SERVICE_UUID] },
+            { services: [NUS_SERVICE_UUID] }
           ],
           optionalServices: [
             PYBRICKS_SERVICE_UUID,
@@ -120,22 +124,40 @@
 
         bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
 
-        // 建立連線
         const server = await bluetoothDevice.gatt.connect();
-
         status.innerText = "連線成功，正在掛載資料通道...";
-        
-        // 嘗試取得 Pybricks 專屬事件通知
+
+        let channelFound = false;
+
+        // 管道 1：嘗試掛載 Pybricks 原生事件通道
         try {
           const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
           const char = await service.getCharacteristic(PYBRICKS_EVENT_CHAR_UUID);
           await char.startNotifications();
-          char.addEventListener("characteristicvaluechanged", handlePybricksData);
+          char.addEventListener("characteristicvaluechanged", handleStreamData);
+          channelFound = true;
         } catch (e) {
-          console.warn("無法開啟 Pybricks 原生通道，嘗試以通用模式監聽", e);
+          console.warn("Pybricks 原生通道未就緒，嘗試 NUS 通道", e);
         }
 
-        status.innerText = "即時測距中（連線成功）";
+        // 管道 2：若原生通道無回應，掛載 Nordic UART 通道
+        if (!channelFound) {
+          try {
+            const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+            const char = await service.getCharacteristic(NUS_TX_CHAR_UUID);
+            await char.startNotifications();
+            char.addEventListener("characteristicvaluechanged", handleStreamData);
+            channelFound = true;
+          } catch (e) {
+            console.warn("NUS 通道掛載失敗", e);
+          }
+        }
+
+        if (!channelFound) {
+          throw new Error("無法掛載資料特徵值通道，請確認 Hub 是否正在執行程式");
+        }
+
+        status.innerText = "即時測距中（已接收通道訊號）";
         btn.innerText = "已連線 (即時更新中)";
         btn.style.background = "#10b981";
         btn.style.borderColor = "#059669";
@@ -143,7 +165,7 @@
       } catch (err) {
         status.innerText = "連線失敗: " + err.message;
         btn.innerText = "連線並開始測距";
-        console.error("藍牙連線錯誤詳情：", err);
+        console.error("藍牙連線錯誤：", err);
       }
     }
 
@@ -158,19 +180,38 @@
       document.getElementById("distVal").style.color = "#ffffff";
     }
 
-    function handlePybricksData(event) {
-      const dataView = event.target.value;
-      if (dataView.byteLength < 3) return;
+    // 處理字串串流解碼
+    function handleStreamData(event) {
+      const text = new TextDecoder().decode(event.target.value);
+      rxBuffer += text;
 
-      // 提取數值（第倒數 2 個 bytes）
-      const rawInt = dataView.getInt16(dataView.byteLength - 2, true);
-      const distCm = rawInt / 10.0;
+      // 遇換行符號即分割處理
+      if (rxBuffer.includes("\n")) {
+        const lines = rxBuffer.split(/\r?\n/);
+        rxBuffer = lines.pop(); // 保留尚未結尾的片段
 
-      if (!isNaN(distCm) && distCm >= 0 && distCm <= 400) {
-        const displayEl = document.getElementById("distVal");
-        displayEl.innerText = distCm.toFixed(1);
-        displayEl.style.color = (distCm <= 10) ? "#ff5252" : "#00e676";
+        // 取出最新的有效數值
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const cleanStr = lines[i].trim();
+          if (!cleanStr) continue;
+
+          // 過濾掉可能夾帶的非數字字元
+          const match = cleanStr.match(/[0-9]+(\.[0-9]+)?/);
+          if (match) {
+            const val = parseFloat(match[0]);
+            if (!isNaN(val) && val >= 0 && val <= 400) {
+              updateDisplay(val);
+              break;
+            }
+          }
+        }
       }
+    }
+
+    function updateDisplay(val) {
+      const displayEl = document.getElementById("distVal");
+      displayEl.innerText = val.toFixed(1);
+      displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
     }
   </script>
 </body>
