@@ -49,7 +49,7 @@
 <body>
 
   <div class="app-wrapper">
-    <div id="statusText">點擊下方按鈕開始連線</div>
+    <div id="statusText">點擊下方按鈕連線</div>
 
     <div class="display-container">
       <span id="distVal">--.-</span>
@@ -60,8 +60,9 @@
   </div>
 
   <script>
-    const PYBRICKS_SERVICE_UUID = "c5f50001-8280-46da-89f4-6d8051e4aeef";
-    const PYBRICKS_EVENT_CHAR_UUID = "c5f50003-8280-46da-89f4-6d8051e4aeef";
+    // 使用標準 Nordic UART Service (MicroPython print 專用通道)
+    const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const NUS_TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // 具備 Notify 權限
 
     let bluetoothDevice = null;
     let rxBuffer = "";
@@ -76,25 +77,25 @@
 
         bluetoothDevice = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
-          optionalServices: [PYBRICKS_SERVICE_UUID, "generic_access"]
+          optionalServices: [NUS_SERVICE_UUID, "generic_access"]
         });
 
-        status.innerText = `連線中：${bluetoothDevice.name || "Hub"}...`;
+        status.innerText = `連接中：${bluetoothDevice.name || "Hub"}...`;
         btn.innerText = "建立連線...";
 
         bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
 
         const server = await bluetoothDevice.gatt.connect();
-        status.innerText = "連線成功，正在掛載資料特徵值...";
+        status.innerText = "連線成功，正在掛載 UART 輸出通道...";
 
-        const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
-        const eventChar = await service.getCharacteristic(PYBRICKS_EVENT_CHAR_UUID);
+        const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+        const txChar = await service.getCharacteristic(NUS_TX_CHAR_UUID);
 
-        // 啟動 Pybricks 事件監聽
-        await eventChar.startNotifications();
-        eventChar.addEventListener("characteristicvaluechanged", handleEventData);
+        // 啟動真正具備 Notify 屬性的 TX 特徵值
+        await txChar.startNotifications();
+        txChar.addEventListener("characteristicvaluechanged", handleUartData);
 
-        status.innerText = "✅ 通道掛載完成！請按一下 Hub 中央鍵啟動測距";
+        status.innerText = "✅ UART 通道已就緒！請按一下 Hub 中央鍵啟動測距";
         btn.innerText = "已連線 (即時接收中)";
         btn.style.background = "#10b981";
         btn.style.borderColor = "#059669";
@@ -102,7 +103,7 @@
       } catch (err) {
         status.innerText = "連線失敗: " + err.message;
         btn.innerText = "連線 SPIKE 藍牙";
-        console.error("藍牙連線錯誤：", err);
+        console.error("連線錯誤詳情：", err);
       }
     }
 
@@ -117,46 +118,27 @@
       document.getElementById("distVal").style.color = "#ffffff";
     }
 
-    function handleEventData(event) {
-      const dataView = event.target.value;
-      if (dataView.byteLength < 2) return;
+    // 接收 print() 的文字串流
+    function handleUartData(event) {
+      const value = event.target.value;
+      if (value.byteLength < 1) return;
 
-      // Pybricks 規範：Byte 0 為事件類型，0x01 為 stdout 終端文字
-      const eventType = dataView.getUint8(0);
-      
-      // 取出文字 Payload (Byte 1 之後)
-      const textChunk = new Uint8Array(dataView.buffer, dataView.byteOffset + 1);
-      const decoded = new TextDecoder("utf-8").decode(textChunk);
+      const decoded = new TextDecoder("utf-8").decode(value);
       rxBuffer += decoded;
 
-      // 遇換行符號即分割出數值
       if (rxBuffer.includes("\n")) {
         const lines = rxBuffer.split(/\r?\n/);
-        rxBuffer = lines.pop(); // 保留尚未完結的片段
+        rxBuffer = lines.pop(); // 保留尚未結尾的片段
 
         for (let i = lines.length - 1; i >= 0; i--) {
           const line = lines[i].trim();
           if (!line) continue;
 
-          // 抓取帶有小數點的數字
           const match = line.match(/\d+(\.\d+)?/);
           if (match) {
             const val = parseFloat(match[0]);
             if (!isNaN(val) && val >= 0 && val <= 400) {
-              updateDisplay(val);
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    function updateDisplay(val) {
-      const displayEl = document.getElementById("distVal");
-      displayEl.innerText = val.toFixed(1);
-      displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
-      document.getElementById("statusText").innerText = `⚡ 即時數值：${val.toFixed(1)} cm`;
-    }
-  </script>
-</body>
-</html>
+              const displayEl = document.getElementById("distVal");
+              displayEl.innerText = val.toFixed(1);
+              displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
+              document.getElementById("statusText").innerText = `⚡
