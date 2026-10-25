@@ -17,8 +17,8 @@
       color: #ffffff;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       user-select: none;
+      overflow: hidden;
     }
-    /* 改用安全的垂直彈性排版，由上到下，保證每一項都在畫面上 */
     .app-wrapper {
       width: 100%;
       height: 100%;
@@ -39,12 +39,12 @@
       justify-content: center;
     }
     #distVal {
-      font-size: min(40vw, 35vh);
+      font-size: min(42vw, 36vh);
       font-weight: 900;
       line-height: 1;
       color: #00e676; /* 正常綠色 */
       font-variant-numeric: tabular-nums;
-      transition: color 0.15s ease;
+      transition: color 0.1s ease;
     }
     .unit {
       font-size: min(10vw, 10vh);
@@ -52,146 +52,115 @@
       color: #64748b;
       margin-left: 15px;
     }
-    /* 實心藍色連線大按鈕，清晰明顯 */
     #connectBtn {
       background: #2563eb;
       color: #ffffff;
       border: 2px solid #3b82f6;
-      padding: 16px 40px;
-      font-size: clamp(18px, 3vw, 26px);
+      padding: 16px 42px;
+      font-size: clamp(18px, 3vw, 24px);
       font-weight: bold;
       border-radius: 50px;
       cursor: pointer;
       box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
     }
     #connectBtn:active {
-      background: #1d4ed8;
       transform: scale(0.96);
+      background: #1d4ed8;
     }
   </style>
 </head>
 <body>
 
   <div class="app-wrapper">
-    <!-- 1. 上方狀態列 -->
-    <div id="statusText">等待連線 SPIKE...</div>
+    <div id="statusText">請點擊下方按鈕開始監聽</div>
 
-    <!-- 2. 中間超大數字 -->
     <div class="display-container">
       <span id="distVal">--.-</span>
       <span class="unit">cm</span>
     </div>
 
-    <!-- 3. 下方醒目按鈕（絕對固定在視窗內） -->
-    <button id="connectBtn" onclick="connectSpike()">連線 SPIKE 藍牙</button>
+    <button id="connectBtn" onclick="toggleScan()">連線並開始測距</button>
   </div>
 
   <script>
-    // 你的 Google Apps Script 網址
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbyBcO3DwbDfPySPUc7Zf4WeF1T4mpT4N1MlfpChd10SOI3DMlCxQuyeqHDtCa9SQbqRpw/exec";
+    // Pybricks 官方專屬藍牙服務 UUID
+    const PYBRICKS_SERVICE_UUID = "c5f50001-8280-46da-89f4-6d8051e4aeef";
+    const PYBRICKS_EVENT_CHAR_UUID = "c5f50003-8280-46da-89f4-6d8051e4aeef";
 
-    // Pybricks 專用 Nordic UART Service UUID
-    const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    const NUS_TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+    let bluetoothDevice = null;
+    let eventCharacteristic = null;
 
-    let rxBuffer = "";
-    let lastUploadTime = 0;
-    const UPLOAD_INTERVAL = 1000; // 每 1 秒上傳一筆
-
-    async function connectSpike() {
+    async function toggleScan() {
       const btn = document.getElementById("connectBtn");
       const status = document.getElementById("statusText");
 
       try {
-        status.innerText = "正在搜尋附近所有藍牙裝置...";
-        
-        const device = await navigator.bluetooth.requestDevice({
+        status.innerText = "正在搜尋 SPIKE Hub...";
+        btn.innerText = "搜尋配對中...";
+
+        // 搜尋 Pybricks Hub
+        bluetoothDevice = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
-          optionalServices: [NUS_SERVICE_UUID]
+          optionalServices: [PYBRICKS_SERVICE_UUID]
         });
 
-        status.innerText = `正在連線至 ${device.name || "裝置"}...`;
+        status.innerText = `正在連接：${bluetoothDevice.name || "Pybricks Hub"}...`;
         btn.innerText = "連線中...";
 
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(NUS_SERVICE_UUID);
-        const txChar = await service.getCharacteristic(NUS_TX_CHAR_UUID);
+        const server = await bluetoothDevice.gatt.connect();
+        const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
+        eventCharacteristic = await service.getCharacteristic(PYBRICKS_EVENT_CHAR_UUID);
 
-        await txChar.startNotifications();
-        txChar.addEventListener("characteristicvaluechanged", handleData);
+        // 啟動原生廣播/通知監聽
+        await eventCharacteristic.startNotifications();
+        eventCharacteristic.addEventListener("characteristicvaluechanged", handlePybricksData);
 
-        // 連線成功：按鈕保留，文字改為綠色「已連線」
-        btn.innerText = "已連線（點擊可重連）";
+        status.innerText = "即時測距中（連線成功）";
+        btn.innerText = "已連線 (即時接收中)";
         btn.style.background = "#10b981";
         btn.style.borderColor = "#059669";
-        status.innerText = `連線成功：${device.name || "Pybricks Hub"}`;
 
-        device.addEventListener("gattserverdisconnected", () => {
+        bluetoothDevice.addEventListener("gattserverdisconnected", () => {
+          status.innerText = "連線已中斷";
           btn.innerText = "重新連線 SPIKE";
           btn.style.background = "#2563eb";
           btn.style.borderColor = "#3b82f6";
-          status.innerText = "連線已中斷";
           document.getElementById("distVal").innerText = "--.-";
           document.getElementById("distVal").style.color = "#ffffff";
         });
 
       } catch (err) {
-        btn.innerText = "連線 SPIKE 藍牙";
         status.innerText = "連線失敗: " + err.message;
-        console.error("藍牙連線錯誤：", err);
+        btn.innerText = "連線並開始測距";
+        console.error(err);
       }
     }
 
-    function handleData(event) {
-      // 1. 將二進位數據解碼為文字
-      const text = new TextDecoder().decode(event.target.value);
-      rxBuffer += text;
+    // 解析 Pybricks 廣播與事件封包
+    function handlePybricksData(event) {
+      const dataView = event.target.value;
+      if (dataView.byteLength < 1) return;
 
-      // 2. 顯示在狀態列上，讓你立刻確認有沒有收到原始藍牙封包
-      const status = document.getElementById("statusText");
+      // 檢查是否為廣播資料事件 (Pybricks Broadcast Event ID 通常為 0x01)
+      const eventId = dataView.getUint8(0);
+      
+      // 當接收到資料 payload
+      if (dataView.byteLength >= 3) {
+        // 從封包最後 2 個 bytes 還原出傳遞的整數
+        const rawInt = dataView.getInt16(dataView.byteLength - 2, true);
+        const distCm = rawInt / 10.0;
 
-      // 3. 判斷是否有換行符號 (\n 或 \r\n)
-      if (rxBuffer.includes("\n")) {
-        // 依據換行符號切開
-        const lines = rxBuffer.split(/\r?\n/);
-        
-        // 保留最後一個尚未結尾的片段
-        rxBuffer = lines.pop();
-
-        // 倒序尋找最新的一筆有效數字
-        for (let i = lines.length - 1; i >= 0; i--) {
-          const cleanStr = lines[i].trim();
-          if (!cleanStr) continue;
-
-          const val = parseFloat(cleanStr);
-          if (!isNaN(val)) {
-            // A. 畫面大數字即時跳動
-            const displayEl = document.getElementById("distVal");
-            displayEl.innerText = val.toFixed(1);
-            displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
-            
-            // 狀態列顯示接收到的原始值以供確認
-            status.innerText = `接收成功：${val.toFixed(1)} cm`;
-
-            // B. 控制每 1 秒寫入一次 Google 試算表
-            const now = Date.now();
-            if (now - lastUploadTime >= UPLOAD_INTERVAL) {
-              lastUploadTime = now;
-              uploadToSheet(val);
-            }
-            break;
-          }
+        if (!isNaN(distCm) && distCm >= 0 && distCm <= 400) {
+          updateDisplay(distCm);
         }
       }
     }
 
-    function uploadToSheet(distance) {
-      fetch(GAS_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ distance: distance })
-      }).catch(err => console.error("上傳失敗：", err));
+    function updateDisplay(val) {
+      const displayEl = document.getElementById("distVal");
+      displayEl.innerText = val.toFixed(1);
+      // 小於等於 10 cm 轉為醒目警示紅字，否則維持綠字
+      displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
     }
   </script>
 </body>
