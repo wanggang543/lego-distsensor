@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPIKE 距離偵測儀</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f4ee;
+    --panel: #ffffff;
+    --ink: #1c2430;
+    --muted: #6b7482;
+    --line: #dcd8cc;
+    --safe: #2f9e63;
+    --slow: #e6a700;
+    --fast: #e8702a;
+    --stop: #d8363a;
+    --idle: #9aa3b0;
+    --accent: var(--idle);
+    --num: "Rubik", "Noto Sans TC", system-ui, sans-serif;
+    --txt: "Noto Sans TC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181f;
+      --panel: #1d232d;
+      --ink: #eef1f5;
+      --muted: #97a1b0;
+      --line: #323a47;
+      --safe: #4cc38a;
+      --slow: #f2bb2e;
+      --fast: #f28a4b;
+      --stop: #ef5a5e;
+      --idle: #6f7886;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--txt);
+    line-height: 1.6;
+    min-height: 100vh;
+    padding: max(20px, env(safe-area-inset-top)) 20px max(28px, env(safe-area-inset-bottom));
+  }
+  main { max-width: 760px; margin: 0 auto; display: grid; gap: 18px; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 1.15rem; font-weight: 700; margin: 0; letter-spacing: .02em; }
+  .conn { display: flex; align-items: center; gap: 10px; font-size: .9rem; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--idle); flex: none; }
+  .conn.on .dot { background: var(--safe); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 28px 24px;
+  }
+
+  /* 主讀數 */
+  .reading { text-align: center; }
+  .value {
+    font-family: var(--num);
+    font-weight: 900;
+    font-size: clamp(5rem, 24vw, 9.5rem);
+    line-height: 1;
+    letter-spacing: -.03em;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    transition: color .25s;
+  }
+  .value small { font-size: .28em; font-weight: 700; margin-left: .15em; letter-spacing: 0; color: var(--muted); }
+  .state { margin-top: 10px; font-size: 1.1rem; font-weight: 700; color: var(--accent); transition: color .25s; min-height: 1.7em; }
+  .sub { color: var(--muted); font-size: .9rem; min-height: 1.4em; }
+
+  /* 尺規 */
+  .ruler { margin-top: 34px; position: relative; padding-top: 30px; }
+  .bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; }
+  .bar span { display: block; height: 100%; }
+  .z-stop { background: var(--stop); }
+  .z-fast { background: var(--fast); }
+  .z-slow { background: var(--slow); }
+  .z-safe { background: var(--safe); opacity: .85; }
+  .ticks { position: relative; height: 22px; margin-top: 4px; font-size: .78rem; color: var(--muted); font-family: var(--num); }
+  .ticks i { position: absolute; transform: translateX(-50%); font-style: normal; }
+  .ticks i::before { content: ""; position: absolute; left: 50%; top: -6px; width: 1px; height: 5px; background: var(--muted); }
+  .marker {
+    position: absolute; top: 0; left: 0;
+    width: 0; height: 0;
+    transition: left .35s cubic-bezier(.2,.8,.2,1), opacity .2s;
+  }
+  .marker::before {
+    content: ""; position: absolute; left: -9px; top: 6px;
+    border: 9px solid transparent; border-top: 14px solid var(--ink); border-bottom: 0;
+  }
+  .marker::after {
+    content: ""; position: absolute; left: -1px; top: 20px; width: 2px; height: 28px; background: var(--ink);
+  }
+  .marker.off { opacity: 0; }
+
+  /* 圖表 */
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; font-size: .9rem; color: var(--muted); }
+  .chart-head b { color: var(--ink); font-weight: 700; }
+  canvas { width: 100%; height: 180px; display: block; }
+
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 700;
+    border-radius: 12px; border: 1px solid var(--ink);
+    padding: 11px 20px; cursor: pointer;
+    background: var(--ink); color: var(--bg);
+  }
+  button.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  button:hover { filter: brightness(1.12); }
+  button:focus-visible { outline: 3px solid var(--slow); outline-offset: 2px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .note { color: var(--muted); font-size: .85rem; }
+  .note ol { margin: 6px 0 0; padding-left: 1.3em; }
+  .err { color: var(--stop); font-size: .9rem; min-height: 1.4em; }
+  details summary { cursor: pointer; font-weight: 700; font-size: .95rem; }
+  details[open] summary { margin-bottom: 8px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .marker, .value, .state { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>SPIKE 距離偵測儀</h1>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">尚未連線</span></div>
+  </header>
+
+  <section class="panel reading" aria-live="polite">
+    <div class="value" id="value">--<small>cm</small></div>
+    <div class="state" id="state">請先連接 Hub</div>
+    <div class="sub" id="sub"></div>
+
+    <div class="ruler">
+      <div class="marker off" id="marker"></div>
+      <div class="bar" aria-hidden="true">
+        <span class="z-stop" style="width:10%"></span>
+        <span class="z-fast" style="width:10%"></span>
+        <span class="z-slow" style="width:20%"></span>
+        <span class="z-safe" style="width:60%"></span>
+      </div>
+      <div class="ticks" aria-hidden="true">
+        <i style="left:0%">0</i><i style="left:10%">5</i><i style="left:20%">10</i>
+        <i style="left:40%">20</i><i style="left:70%">35</i><i style="left:100%">50 cm</i>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="chart-head">
+      <span>最近 60 秒</span>
+      <span>最小 <b id="min">--</b> cm　最大 <b id="max">--</b> cm</span>
+    </div>
+    <canvas id="chart" aria-label="距離變化曲線"></canvas>
+  </section>
+
+  <div class="actions">
+    <button id="btnConnect">連接 Hub</button>
+    <button id="btnDisconnect" class="ghost" disabled>中斷連線</button>
+    <button id="btnDemo" class="ghost">模擬資料</button>
+  </div>
+  <div class="err" id="err" role="alert"></div>
+
+  <section class="panel note">
+    <details>
+      <summary>使用方式</summary>
+      <ol>
+        <li>用 Pybricks Code 把程式下載到 Hub，並關閉 Pybricks Code 的藍牙連線（藍牙同時只能連一個裝置）。</li>
+        <li>按 Hub 的藍牙按鈕啟動程式，等待燈號閃爍藍色。</li>
+        <li>在本頁按「連接 Hub」，選擇你的 Hub。</li>
+        <li>需使用 Chrome、Edge 或 Android 版 Chrome，並透過 https 開啟（GitHub Pages 已符合）。iPhone／Safari 不支援 Web Bluetooth。</li>
+      </ol>
+    </details>
+  </section>
+</main>
+
+<script>
+(() => {
+  // Pybricks BLE 服務
+  const PYBRICKS_SERVICE = 'c5f50001-8280-46da-89f4-6d8051e4aeef';
+  const PYBRICKS_CHAR    = 'c5f50002-8280-46da-89f4-6d8051e4aeef';
+  const EVT_STDOUT = 0x01;
+
+  const MAX_CM = 50;        // 尺規最大值
+  const OUT_OF_RANGE = 900; // 程式在無讀數時回傳 999
+  const HISTORY_SEC = 60;
+  const STALE_MS = 3000;
+
+  const $ = id => document.getElementById(id);
+  const el = {
+    value: $('value'), state: $('state'), sub: $('sub'), marker: $('marker'),
+    conn: $('conn'), connText: $('connText'), err: $('err'),
+    min: $('min'), max: $('max'), canvas: $('chart'),
+    btnConnect: $('btnConnect'), btnDisconnect: $('btnDisconnect'), btnDemo: $('btnDemo')
+  };
+
+  let device = null, characteristic = null, rxBuffer = '';
+  let history = [];            // {t, v}
+  let lastDataAt = 0;
+  let demoTimer = null;
+  const decoder = new TextDecoder();
+
+  const zones = [
+    { max: 5,        cls: '--stop', text: '太近了！持續長音' },
+    { max: 10,       cls: '--fast', text: '接近中：快速嗶聲' },
+    { max: 20,       cls: '--slow', text: '注意：慢速嗶聲' },
+    { max: Infinity, cls: '--safe', text: '安全距離' }
+  ];
+
+  function setAccent(cssVar) {
+    document.documentElement.style.setProperty('--accent', `var(${cssVar})`);
+  }
+
+  function showReading(cm) {
+    lastDataAt = performance.now();
+    const outOfRange = cm >= OUT_OF_RANGE;
+
+    if (outOfRange) {
+      el.value.innerHTML = '--<small>cm</small>';
+      el.state.textContent = '超出偵測範圍';
+      el.sub.textContent = '感測器沒有讀到物體';
+      setAccent('--idle');
+      el.marker.classList.add('off');
+    } else {
+      el.value.innerHTML = cm.toFixed(1) + '<small>cm</small>';
+      const z = zones.find(z => cm <= z.max);
+      el.state.textContent = z.text;
+      el.sub.textContent = '';
+      setAccent(z.cls);
+      el.marker.classList.remove('off');
+      el.marker.style.left = (Math.min(cm, MAX_CM) / MAX_CM * 100) + '%';
+      history.push({ t: lastDataAt, v: cm });
+    }
+    trimHistory();
+    drawChart();
+    updateMinMax();
+  }
+
+  function trimHistory() {
+    const cutoff = performance.now() - HISTORY_SEC * 1000;
+    while (history.length && history[0].t < cutoff) history.shift();
+  }
+
+  function updateMinMax() {
+    if (!history.length) { el.min.textContent = el.max.textContent = '--'; return; }
+    const vs = history.map(h => h.v);
+    el.min.textContent = Math.min(...vs).toFixed(1);
+    el.max.textContent = Math.max(...vs).toFixed(1);
+  }
+
+  /* ---------- 圖表 ---------- */
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function drawChart() {
+    const c = el.canvas;
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; }
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    const padL = 30, padR = 6, padT = 8, padB = 8;
+    const pw = w - padL - padR, ph = h - padT - padB;
+    const y = v => padT + ph - Math.min(v, MAX_CM) / MAX_CM * ph;
+
+    g.font = '11px Rubik, sans-serif';
+    g.textBaseline = 'middle';
+    const line = cssVar('--line'), muted = cssVar('--muted');
+
+    [[5, '--stop'], [10, '--fast'], [20, '--slow']].forEach(([v, col]) => {
+      g.strokeStyle = cssVar(col); g.globalAlpha = .55; g.setLineDash([4, 4]);
+      g.beginPath(); g.moveTo(padL, y(v)); g.lineTo(w - padR, y(v)); g.stroke();
+      g.globalAlpha = 1; g.setLineDash([]);
+      g.fillStyle = muted; g.fillText(v, 2, y(v));
+    });
+    g.strokeStyle = line;
+    g.beginPath(); g.moveTo(padL, y(0)); g.lineTo(w - padR, y(0)); g.stroke();
+    g.fillStyle = muted; g.fillText('0', 2, y(0) - 1); g.fillText('50', 2, y(MAX_CM) + 6);
+
+    if (history.length < 2) return;
+    const now = performance.now();
+    const x = t => padL + pw - (now - t) / (HISTORY_SEC * 1000) * pw;
+
+    g.strokeStyle = cssVar('--ink'); g.lineWidth = 2; g.lineJoin = 'round';
+    g.beginPath();
+    history.forEach((p, i) => i ? g.lineTo(x(p.t), y(p.v)) : g.moveTo(x(p.t), y(p.v)));
+    g.stroke();
+    const last = history[history.length - 1];
+    g.fillStyle = cssVar('--ink');
+    g.beginPath(); g.arc(x(last.t), y(last.v), 4, 0, Math.PI * 2); g.fill();
+  }
+
+  /* ---------- 藍牙 ---------- */
+  function setConnected(on, name) {
+    el.conn.classList.toggle('on', on);
+    el.connText.textContent = on ? `已連線：${name}` : (demoTimer ? '模擬資料中' : '尚未連線');
+    el.btnConnect.disabled = on || !!demoTimer;
+    el.btnDisconnect.disabled = !on && !demoTimer;
+    el.btnDemo.textContent = demoTimer ? '停止模擬' : '模擬資料';
+    el.btnDemo.disabled = on;
+  }
+
+  function resetDisplay(msg) {
+    el.value.innerHTML = '--<small>cm</small>';
+    el.state.textContent = msg;
+    el.sub.textContent = '';
+    setAccent('--idle');
+    el.marker.classList.add('off');
+  }
+
+  function handleNotification(event) {
+    const dv = event.target.value;
+    if (dv.getUint8(0) !== EVT_STDOUT) return; // 只處理 print() 輸出
+    rxBuffer += decoder.decode(new Uint8Array(dv.buffer, dv.byteOffset + 1, dv.byteLength - 1));
+    let idx;
+    while ((idx = rxBuffer.search(/\r?\n/)) >= 0) {
+      const lineText = rxBuffer.slice(0, idx).trim();
+      rxBuffer = rxBuffer.slice(rxBuffer.indexOf('\n', idx) + 1);
+      if (/^-?\d+(\.\d+)?$/.test(lineText)) showReading(parseFloat(lineText));
+    }
+  }
+
+  async function connect() {
+    el.err.textContent = '';
+    if (!navigator.bluetooth) {
+      el.err.textContent = '這個瀏覽器不支援 Web Bluetooth，請改用 Chrome 或 Edge（需 https）。';
+      return;
+    }
+    try {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [PYBRICKS_SERVICE] }],
+        optionalServices: [PYBRICKS_SERVICE]
+      });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+      el.connText.textContent = '連線中…';
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(PYBRICKS_SERVICE);
+      characteristic = await service.getCharacteristic(PYBRICKS_CHAR);
+      characteristic.addEventListener('characteristicvaluechanged', handleNotification);
+      await characteristic.startNotifications();
+      rxBuffer = '';
+      setConnected(true, device.name || 'Hub');
+      resetDisplay('等待資料…請確認 Hub 上的程式正在執行');
+    } catch (e) {
+      if (e.name !== 'NotFoundError') {
+        el.err.textContent = '連線失敗：' + e.message + '（請確認 Pybricks Code 已中斷連線）';
+      }
+      setConnected(false);
+    }
+  }
+
+  function onDisconnected() {
+    characteristic = null;
+    setConnected(false);
+    resetDisplay('連線已中斷');
+    el.err.textContent = '與 Hub 的連線已中斷，可再按「連接 Hub」重新連線。';
+  }
+
+  function disconnect() {
+    if (demoTimer) return toggleDemo();
+    if (device && device.gatt.connected) device.gatt.disconnect();
+  }
+
+  /* ---------- 模擬資料 ---------- */
+  function toggleDemo() {
+    if (demoTimer) {
+      clearInterval(demoTimer); demoTimer = null;
+      setConnected(false); resetDisplay('請先連接 Hub');
+      return;
+    }
+    el.err.textContent = '';
+    let t = 0;
+    demoTimer = setInterval(() => {
+      t += 0.12;
+      const v = 22 + 20 * Math.sin(t) + 6 * Math.sin(t * 2.7);
+      showReading(Math.max(1.5, v));
+    }, 500);
+    setConnected(false);
+  }
+
+  /* ---------- 事件 ---------- */
+  el.btnConnect.addEventListener('click', connect);
+  el.btnDisconnect.addEventListener('click', disconnect);
+  el.btnDemo.addEventListener('click', toggleDemo);
+  window.addEventListener('resize', drawChart);
+
+  // 圖表持續捲動；資料中斷時提示
+  setInterval(() => {
+    trimHistory(); drawChart();
+    const live = (device && device.gatt && device.gatt.connected) || demoTimer;
+    if (live && lastDataAt && performance.now() - lastDataAt > STALE_MS) {
+      el.sub.textContent = '超過 3 秒沒有收到新資料，請確認程式仍在執行';
+    }
+  }, 1000);
+
+  drawChart();
+})();
+</script>
+</body>
+</html>
