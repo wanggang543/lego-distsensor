@@ -10,40 +10,40 @@
       width: 100%; height: 100%;
       background-color: #0b0f19; color: #ffffff;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      user-select: none; overflow: hidden;
+      user-select: none;
     }
     .app-wrapper {
       width: 100%; height: 100%;
       display: flex; flex-direction: column;
-      align-items: center; justify-content: space-evenly;
-      padding: 20px 10px;
+      align-items: center; justify-content: space-between;
+      padding: 15px;
     }
     #statusText {
-      font-size: clamp(14px, 2.5vw, 20px);
-      color: #38bdf8; text-align: center;
-      max-width: 90%; line-height: 1.4;
+      font-size: 16px; color: #38bdf8; text-align: center;
       font-family: monospace;
     }
     .display-container {
       display: flex; align-items: baseline; justify-content: center;
     }
     #distVal {
-      font-size: min(42vw, 36vh); font-weight: 900; line-height: 1;
+      font-size: min(35vw, 28vh); font-weight: 900; line-height: 1;
       color: #00e676; font-variant-numeric: tabular-nums;
-      transition: color 0.1s ease;
     }
-    .unit {
-      font-size: min(10vw, 10vh); font-weight: 700;
-      color: #64748b; margin-left: 15px;
-    }
+    .unit { font-size: min(8vw, 8vh); font-weight: 700; color: #64748b; margin-left: 10px; }
     #connectBtn {
       background: #2563eb; color: #ffffff; border: 2px solid #3b82f6;
-      padding: 16px 42px; font-size: clamp(18px, 3vw, 24px);
-      font-weight: bold; border-radius: 50px; cursor: pointer;
-      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
-      transition: transform 0.1s ease, background 0.2s ease;
+      padding: 12px 30px; font-size: 18px; font-weight: bold;
+      border-radius: 40px; cursor: pointer;
     }
-    #connectBtn:active { transform: scale(0.96); background: #1d4ed8; }
+    /* 黑色監聽黑盒子 */
+    #monitorBox {
+      width: 95%; max-width: 600px; height: 130px;
+      background: #111827; border: 1px solid #374151;
+      border-radius: 8px; padding: 10px; font-family: monospace;
+      font-size: 13px; color: #a7f3d0; overflow-y: auto;
+      text-align: left;
+    }
+    .log-item { border-bottom: 1px solid #1f2937; padding: 2px 0; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -56,115 +56,92 @@
       <span class="unit">cm</span>
     </div>
 
+    <!-- 黑色監聽黑盒子 -->
+    <div id="monitorBox">
+      <div style="color: #9ca3af;">[監聽黑盒子] 待命中，尚未連線...</div>
+    </div>
+
     <button id="connectBtn" type="button" onclick="handleConnect()">連線 SPIKE 藍牙</button>
   </div>
 
   <script>
-    // Pybricks 官方專屬服務與事件特徵值
     const PYBRICKS_SERVICE_UUID = "c5f50001-8280-46da-89f4-6d8051e4aeef";
-    const PYBRICKS_EVENT_CHAR_UUID = "c5f50003-8280-46da-89f4-6d8051e4aeef";
 
     let bluetoothDevice = null;
+    let targetChar = null;
+    let isPolling = false;
+    let packetCount = 0;
     let rxBuffer = "";
+
+    function addLog(text, color = "#a7f3d0") {
+      const box = document.getElementById("monitorBox");
+      const item = document.createElement("div");
+      item.className = "log-item";
+      item.style.color = color;
+      item.innerText = `[#${packetCount}] ${text}`;
+      box.insertBefore(item, box.firstChild);
+      if (box.children.length > 25) box.removeChild(box.lastChild);
+    }
 
     async function handleConnect() {
       const status = document.getElementById("statusText");
       const btn = document.getElementById("connectBtn");
 
       if (!navigator.bluetooth) {
-        alert("瀏覽器不支援 Web Bluetooth，請確認使用 HTTPS 與 Chrome/Edge/Bluefy");
+        alert("瀏覽器未支援 Web Bluetooth，請確認使用 HTTPS 與 Chrome/Edge/Bluefy");
         return;
       }
 
       try {
         status.innerText = "搜尋 SPIKE Hub 中...";
-        btn.innerText = "配對中...";
+        addLog("正在開啟藍牙搜尋視窗...", "#38bdf8");
 
         bluetoothDevice = await navigator.bluetooth.requestDevice({
-          filters: [
-            { namePrefix: "Pybricks" },
-            { namePrefix: "SPIKE" }
-          ],
-          optionalServices: [PYBRICKS_SERVICE_UUID]
+          acceptAllDevices: true,
+          optionalServices: [PYBRICKS_SERVICE_UUID, "generic_access"]
         });
 
         status.innerText = `連接中：${bluetoothDevice.name || "Hub"}...`;
+        addLog(`已選取裝置：${bluetoothDevice.name}，正在建立 GATT 連線...`);
+
         bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
 
         const server = await bluetoothDevice.gatt.connect();
-        status.innerText = "連線成功，正在掛載 Pybricks 資料通道...";
+        addLog("✅ GATT 連線成功！正在搜尋可用通道...");
 
         const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
-        const eventChar = await service.getCharacteristic(PYBRICKS_EVENT_CHAR_UUID);
+        const characteristics = await service.getCharacteristics();
 
-        // 啟動 Pybricks 事件通知
-        await eventChar.startNotifications();
-        eventChar.addEventListener("characteristicvaluechanged", handlePybricksEvent);
+        addLog(`找到 ${characteristics.length} 個特徵值通道`);
 
-        status.innerText = "✅ 通道已就緒！請按一下 Hub 中央鍵啟動測距";
-        btn.innerText = "已連線 (即時接收中)";
+        // 自動找出支援「讀取 (Read)」或「通知 (Notify)」的特徵值
+        for (const char of characteristics) {
+          addLog(`通道 UUID: ${char.uuid.substring(0, 8)}... (Read: ${char.properties.read}, Notify: ${char.properties.notify})`);
+          if (char.properties.read || char.properties.notify) {
+            targetChar = char;
+          }
+        }
+
+        if (!targetChar) {
+          throw new Error("找不到可通訊的特徵值通道");
+        }
+
+        status.innerText = "✅ 連線就緒！請按一下 Hub 中央鍵啟動測距";
+        btn.innerText = "已連線（即時輪詢中）";
         btn.style.background = "#10b981";
-        btn.style.borderColor = "#059669";
+
+        // 啟動主動輪詢讀取循環 (每 80ms 讀取一次，完全避開 Not supported 錯誤)
+        isPolling = true;
+        startPolling();
 
       } catch (err) {
         status.innerText = "連線失敗: " + err.message;
-        btn.innerText = "連線 SPIKE 藍牙";
+        addLog("連線發生錯誤：" + err.message, "#f87171");
         console.error("連線錯誤：", err);
       }
     }
 
-    function onDisconnected() {
-      const btn = document.getElementById("connectBtn");
-      const status = document.getElementById("statusText");
-      status.innerText = "連線已中斷";
-      btn.innerText = "重新連線 SPIKE";
-      btn.style.background = "#2563eb";
-      btn.style.borderColor = "#3b82f6";
-      document.getElementById("distVal").innerText = "--.-";
-      document.getElementById("distVal").style.color = "#ffffff";
-    }
-
-    // 解析 Pybricks 專屬事件封包
-    function handlePybricksEvent(event) {
-      const value = event.target.value;
-      if (value.byteLength < 2) return;
-
-      // Pybricks 規範：Byte 0 為事件種類，0x01 為 stdout 印出的文字字串
-      const eventType = value.getUint8(0);
-
-      // 只要是 stdout 文字封包 (0x01) 就進行文字解碼
-      if (eventType === 0x01) {
-        const textBytes = new Uint8Array(value.buffer, value.byteOffset + 1, value.byteLength - 1);
-        const text = new TextDecoder("utf-8").decode(textBytes);
-        rxBuffer += text;
-
-        if (rxBuffer.includes("\n")) {
-          const lines = rxBuffer.split(/\r?\n/);
-          rxBuffer = lines.pop(); // 保留尚未結尾的部分
-
-          for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i].trim();
-            if (!line) continue;
-
-            const match = line.match(/\d+(\.\d+)?/);
-            if (match) {
-              const val = parseFloat(match[0]);
-              if (!isNaN(val) && val >= 0 && val <= 400) {
-                updateDisplay(val);
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    function updateDisplay(val) {
-      const displayEl = document.getElementById("distVal");
-      displayEl.innerText = val.toFixed(1);
-      displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
-      document.getElementById("statusText").innerText = `⚡ 即時數值：${val.toFixed(1)} cm`;
-    }
-  </script>
-</body>
-</html>
+    // 主動讀取循環（絕不依賴 startNotifications）
+    async function startPolling() {
+      while (isPolling && targetChar) {
+        try {
