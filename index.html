@@ -49,31 +49,35 @@
 <body>
 
   <div class="app-wrapper">
-    <div id="statusText">點擊下方按鈕連線</div>
+    <div id="statusText">點擊下方按鈕開始連線</div>
 
     <div class="display-container">
       <span id="distVal">--.-</span>
       <span class="unit">cm</span>
     </div>
 
-    <button id="connectBtn" onclick="toggleConnect()">連線 SPIKE 藍牙</button>
+    <button id="connectBtn" type="button" onclick="handleConnectClick()">連線 SPIKE 藍牙</button>
   </div>
 
   <script>
-    // 使用標準 Nordic UART Service (MicroPython print 專用通道)
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    const NUS_TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // 具備 Notify 權限
+    const NUS_TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
     let bluetoothDevice = null;
     let rxBuffer = "";
 
-    async function toggleConnect() {
-      const btn = document.getElementById("connectBtn");
+    async function handleConnectClick() {
       const status = document.getElementById("statusText");
+
+      // 檢查瀏覽器與環境是否支援 Web Bluetooth
+      if (!navigator.bluetooth) {
+        alert("目前瀏覽器或連線環境不支援 Web Bluetooth！\n\n1. 請確認網址開頭是 https:// 而非 http://\n2. 請使用 Chrome 或 Edge 瀏覽器（勿使用無痕視窗）");
+        status.innerText = "❌ 環境不支援藍牙 API（請檢查 HTTPS）";
+        return;
+      }
 
       try {
         status.innerText = "正在搜尋 SPIKE Hub...";
-        btn.innerText = "搜尋配對中...";
 
         bluetoothDevice = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
@@ -81,7 +85,6 @@
         });
 
         status.innerText = `連接中：${bluetoothDevice.name || "Hub"}...`;
-        btn.innerText = "建立連線...";
 
         bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
 
@@ -91,18 +94,17 @@
         const service = await server.getPrimaryService(NUS_SERVICE_UUID);
         const txChar = await service.getCharacteristic(NUS_TX_CHAR_UUID);
 
-        // 啟動真正具備 Notify 屬性的 TX 特徵值
         await txChar.startNotifications();
         txChar.addEventListener("characteristicvaluechanged", handleUartData);
 
         status.innerText = "✅ UART 通道已就緒！請按一下 Hub 中央鍵啟動測距";
+        const btn = document.getElementById("connectBtn");
         btn.innerText = "已連線 (即時接收中)";
         btn.style.background = "#10b981";
         btn.style.borderColor = "#059669";
 
       } catch (err) {
-        status.innerText = "連線失敗: " + err.message;
-        btn.innerText = "連線 SPIKE 藍牙";
+        status.innerText = "連線取消或失敗: " + err.message;
         console.error("連線錯誤詳情：", err);
       }
     }
@@ -118,7 +120,6 @@
       document.getElementById("distVal").style.color = "#ffffff";
     }
 
-    // 接收 print() 的文字串流
     function handleUartData(event) {
       const value = event.target.value;
       if (value.byteLength < 1) return;
@@ -128,7 +129,7 @@
 
       if (rxBuffer.includes("\n")) {
         const lines = rxBuffer.split(/\r?\n/);
-        rxBuffer = lines.pop(); // 保留尚未結尾的片段
+        rxBuffer = lines.pop();
 
         for (let i = lines.length - 1; i >= 0; i--) {
           const line = lines[i].trim();
@@ -141,4 +142,13 @@
               const displayEl = document.getElementById("distVal");
               displayEl.innerText = val.toFixed(1);
               displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
-              document.getElementById("statusText").innerText = `⚡
+              document.getElementById("statusText").innerText = `⚡ 即時數值：${val.toFixed(1)} cm`;
+              break;
+            }
+          }
+        }
+      }
+    }
+  </script>
+</body>
+</html>
