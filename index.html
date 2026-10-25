@@ -29,11 +29,12 @@
       padding: 20px 10px;
     }
     #statusText {
-      font-size: clamp(16px, 3vw, 24px);
+      font-size: clamp(14px, 2.5vw, 20px);
       color: #94a3b8;
       text-align: center;
       max-width: 90%;
       line-height: 1.4;
+      font-family: monospace;
     }
     .display-container {
       display: flex;
@@ -75,21 +76,19 @@
 <body>
 
   <div class="app-wrapper">
-    <div id="statusText">請點擊下方按鈕開始連線</div>
+    <div id="statusText">點擊下方按鈕連線</div>
 
     <div class="display-container">
       <span id="distVal">--.-</span>
       <span class="unit">cm</span>
     </div>
 
-    <button id="connectBtn" onclick="toggleScan()">連線並開始測距</button>
+    <button id="connectBtn" onclick="toggleScan()">連線 SPIKE 藍牙</button>
   </div>
 
   <script>
-    // Pybricks 專屬服務 UUID
     const PYBRICKS_SERVICE_UUID = "c5f50001-8280-46da-89f4-6d8051e4aeef";
-    const PYBRICKS_COMMAND_CHAR_UUID = "c5f50002-8280-46da-89f4-6d8051e4aeef"; // 下達啟動指令
-    const PYBRICKS_EVENT_CHAR_UUID = "c5f50003-8280-46da-89f4-6d8051e4aeef";   // 接收 print 數據
+    const PYBRICKS_EVENT_CHAR_UUID = "c5f50003-8280-46da-89f4-6d8051e4aeef";
 
     let bluetoothDevice = null;
     let rxBuffer = "";
@@ -112,35 +111,26 @@
         });
 
         status.innerText = `正在連接：${bluetoothDevice.name || "Hub"}...`;
-        btn.innerText = "建立 GATT 連線...";
+        btn.innerText = "連線中...";
 
         bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
 
         const server = await bluetoothDevice.gatt.connect();
-        status.innerText = "連線成功，正在掛載資料通道與啟動程式...";
-
         const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
-        const commandChar = await service.getCharacteristic(PYBRICKS_COMMAND_CHAR_UUID);
         const eventChar = await service.getCharacteristic(PYBRICKS_EVENT_CHAR_UUID);
 
-        // 1. 先開啟數據監聽
         await eventChar.startNotifications();
-        eventChar.addEventListener("characteristicvaluechanged", handlePybricksData);
+        eventChar.addEventListener("characteristicvaluechanged", handleRawData);
 
-        // 2.【關鍵核心】：發送「啟動程式指令」讓 Hub 燈號開始轉動！
-        // Pybricks Start User Program 指令代碼為 0x00
-        const startCommand = new Uint8Array([0x00]);
-        await commandChar.writeValueWithResponse(startCommand);
-
-        status.innerText = "即時測距中（Hub 程式已啟動）";
-        btn.innerText = "已連線 (即時更新中)";
+        status.innerText = "連線成功！請按一下 Hub 中央鍵啟動程式";
+        btn.innerText = "已連線 (即時接收中)";
         btn.style.background = "#10b981";
         btn.style.borderColor = "#059669";
 
       } catch (err) {
-        status.innerText = "連線/啟動失敗: " + err.message;
-        btn.innerText = "連線並開始測距";
-        console.error("錯誤詳情：", err);
+        status.innerText = "連線失敗: " + err.message;
+        btn.innerText = "連線 SPIKE 藍牙";
+        console.error("連線錯誤：", err);
       }
     }
 
@@ -155,44 +145,44 @@
       document.getElementById("distVal").style.color = "#ffffff";
     }
 
-    // 解析 Pybricks 丟出的 stdout 終端文字串流
-    function handlePybricksData(event) {
-      const dataView = event.target.value;
-      if (dataView.byteLength < 1) return;
+    // 寬容度最高的原始位元組串流解碼
+    function handleRawData(event) {
+      const value = event.target.value;
+      if (value.byteLength < 1) return;
 
-      // Pybricks Event 封包：第一個 byte 是事件類型 (0x01 代表 stdout 印出的文字)
-      const eventType = dataView.getUint8(0);
+      // 直接將接收到的 Byte 陣列轉換為文字
+      const rawBytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      const decodedText = new TextDecoder("utf-8", { fatal: false }).decode(rawBytes);
+
+      // 累加到文字緩衝區
+      rxBuffer += decodedText;
+
+      // 於頂端狀態列即時顯示接收到的原始字元（除錯用）
+      const status = document.getElementById("statusText");
       
-      // 取出文字 payload
-      const textChunk = new Uint8Array(dataView.buffer, dataView.byteOffset + 1);
-      const decoded = new TextDecoder().decode(textChunk);
-      rxBuffer += decoded;
-
-      // 依換行符號切出最新一筆數值
-      if (rxBuffer.includes("\n")) {
+      // 當緩衝區包含換行或長度超過 4 字元時進行數值提取
+      if (rxBuffer.includes("\n") || rxBuffer.length >= 8) {
         const lines = rxBuffer.split(/\r?\n/);
-        rxBuffer = lines.pop();
+        rxBuffer = lines.pop(); // 保留最後一筆未換行的片段
 
         for (let i = lines.length - 1; i >= 0; i--) {
-          const cleanStr = lines[i].trim();
-          if (!cleanStr) continue;
+          const line = lines[i].trim();
+          if (!line) continue;
 
-          const match = cleanStr.match(/[0-9]+(\.[0-9]+)?/);
+          // 抓取包含小數點的連續數字
+          const match = line.match(/\d+(\.\d+)?/);
           if (match) {
             const val = parseFloat(match[0]);
             if (!isNaN(val) && val >= 0 && val <= 400) {
-              updateDisplay(val);
+              const displayEl = document.getElementById("distVal");
+              displayEl.innerText = val.toFixed(1);
+              displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
+              status.innerText = `即時數據：${val.toFixed(1)} cm`;
               break;
             }
           }
         }
       }
-    }
-
-    function updateDisplay(val) {
-      const displayEl = document.getElementById("distVal");
-      displayEl.innerText = val.toFixed(1);
-      displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
     }
   </script>
 </body>
