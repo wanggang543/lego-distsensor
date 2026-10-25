@@ -32,6 +32,8 @@
       font-size: clamp(16px, 3vw, 24px);
       color: #94a3b8;
       text-align: center;
+      max-width: 90%;
+      line-height: 1.4;
     }
     .display-container {
       display: flex;
@@ -62,6 +64,7 @@
       border-radius: 50px;
       cursor: pointer;
       box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
+      transition: transform 0.1s ease, background 0.2s ease;
     }
     #connectBtn:active {
       transform: scale(0.96);
@@ -72,7 +75,7 @@
 <body>
 
   <div class="app-wrapper">
-    <div id="statusText">請點擊下方按鈕開始監聽</div>
+    <div id="statusText">請點擊下方按鈕開始連線</div>
 
     <div class="display-container">
       <span id="distVal">--.-</span>
@@ -83,84 +86,87 @@
   </div>
 
   <script>
-    // Pybricks 官方專屬藍牙服務 UUID
+    // 定義 Pybricks 原生與常見藍牙服務 UUID
     const PYBRICKS_SERVICE_UUID = "c5f50001-8280-46da-89f4-6d8051e4aeef";
     const PYBRICKS_EVENT_CHAR_UUID = "c5f50003-8280-46da-89f4-6d8051e4aeef";
+    const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 
     let bluetoothDevice = null;
-    let eventCharacteristic = null;
 
     async function toggleScan() {
       const btn = document.getElementById("connectBtn");
       const status = document.getElementById("statusText");
 
       try {
-        status.innerText = "正在搜尋 SPIKE Hub...";
+        status.innerText = "正在搜尋附近的 SPIKE Hub...";
         btn.innerText = "搜尋配對中...";
 
-        // 搜尋 Pybricks Hub
+        // 開放權限通道，防止被瀏覽器 GATT 阻擋
         bluetoothDevice = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
-          optionalServices: [PYBRICKS_SERVICE_UUID]
+          optionalServices: [
+            PYBRICKS_SERVICE_UUID,
+            NUS_SERVICE_UUID,
+            "generic_access"
+          ]
         });
 
-        status.innerText = `正在連接：${bluetoothDevice.name || "Pybricks Hub"}...`;
-        btn.innerText = "連線中...";
+        status.innerText = `正在連接：${bluetoothDevice.name || "Hub"}...`;
+        btn.innerText = "建立 GATT 連線...";
 
+        bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
+
+        // 建立連線
         const server = await bluetoothDevice.gatt.connect();
-        const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
-        eventCharacteristic = await service.getCharacteristic(PYBRICKS_EVENT_CHAR_UUID);
 
-        // 啟動原生廣播/通知監聽
-        await eventCharacteristic.startNotifications();
-        eventCharacteristic.addEventListener("characteristicvaluechanged", handlePybricksData);
+        status.innerText = "連線成功，正在掛載資料通道...";
+        
+        // 嘗試取得 Pybricks 專屬事件通知
+        try {
+          const service = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
+          const char = await service.getCharacteristic(PYBRICKS_EVENT_CHAR_UUID);
+          await char.startNotifications();
+          char.addEventListener("characteristicvaluechanged", handlePybricksData);
+        } catch (e) {
+          console.warn("無法開啟 Pybricks 原生通道，嘗試以通用模式監聽", e);
+        }
 
         status.innerText = "即時測距中（連線成功）";
-        btn.innerText = "已連線 (即時接收中)";
+        btn.innerText = "已連線 (即時更新中)";
         btn.style.background = "#10b981";
         btn.style.borderColor = "#059669";
-
-        bluetoothDevice.addEventListener("gattserverdisconnected", () => {
-          status.innerText = "連線已中斷";
-          btn.innerText = "重新連線 SPIKE";
-          btn.style.background = "#2563eb";
-          btn.style.borderColor = "#3b82f6";
-          document.getElementById("distVal").innerText = "--.-";
-          document.getElementById("distVal").style.color = "#ffffff";
-        });
 
       } catch (err) {
         status.innerText = "連線失敗: " + err.message;
         btn.innerText = "連線並開始測距";
-        console.error(err);
+        console.error("藍牙連線錯誤詳情：", err);
       }
     }
 
-    // 解析 Pybricks 廣播與事件封包
+    function onDisconnected() {
+      const btn = document.getElementById("connectBtn");
+      const status = document.getElementById("statusText");
+      status.innerText = "連線已中斷";
+      btn.innerText = "重新連線 SPIKE";
+      btn.style.background = "#2563eb";
+      btn.style.borderColor = "#3b82f6";
+      document.getElementById("distVal").innerText = "--.-";
+      document.getElementById("distVal").style.color = "#ffffff";
+    }
+
     function handlePybricksData(event) {
       const dataView = event.target.value;
-      if (dataView.byteLength < 1) return;
+      if (dataView.byteLength < 3) return;
 
-      // 檢查是否為廣播資料事件 (Pybricks Broadcast Event ID 通常為 0x01)
-      const eventId = dataView.getUint8(0);
-      
-      // 當接收到資料 payload
-      if (dataView.byteLength >= 3) {
-        // 從封包最後 2 個 bytes 還原出傳遞的整數
-        const rawInt = dataView.getInt16(dataView.byteLength - 2, true);
-        const distCm = rawInt / 10.0;
+      // 提取數值（第倒數 2 個 bytes）
+      const rawInt = dataView.getInt16(dataView.byteLength - 2, true);
+      const distCm = rawInt / 10.0;
 
-        if (!isNaN(distCm) && distCm >= 0 && distCm <= 400) {
-          updateDisplay(distCm);
-        }
+      if (!isNaN(distCm) && distCm >= 0 && distCm <= 400) {
+        const displayEl = document.getElementById("distVal");
+        displayEl.innerText = distCm.toFixed(1);
+        displayEl.style.color = (distCm <= 10) ? "#ff5252" : "#00e676";
       }
-    }
-
-    function updateDisplay(val) {
-      const displayEl = document.getElementById("distVal");
-      displayEl.innerText = val.toFixed(1);
-      // 小於等於 10 cm 轉為醒目警示紅字，否則維持綠字
-      displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
     }
   </script>
 </body>
