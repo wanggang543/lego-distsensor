@@ -143,23 +143,43 @@
     }
 
     function handleData(event) {
+      // 1. 將二進位數據解碼為文字
       const text = new TextDecoder().decode(event.target.value);
       rxBuffer += text;
-      const lines = rxBuffer.split("\n");
 
-      if (lines.length > 1) {
-        const val = parseFloat(lines[lines.length - 2].trim());
-        rxBuffer = lines[lines.length - 1];
+      // 2. 顯示在狀態列上，讓你立刻確認有沒有收到原始藍牙封包
+      const status = document.getElementById("statusText");
 
-        if (!isNaN(val)) {
-          const displayEl = document.getElementById("distVal");
-          displayEl.innerText = val.toFixed(1);
-          displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
+      // 3. 判斷是否有換行符號 (\n 或 \r\n)
+      if (rxBuffer.includes("\n")) {
+        // 依據換行符號切開
+        const lines = rxBuffer.split(/\r?\n/);
+        
+        // 保留最後一個尚未結尾的片段
+        rxBuffer = lines.pop();
 
-          const now = Date.now();
-          if (now - lastUploadTime >= UPLOAD_INTERVAL) {
-            lastUploadTime = now;
-            uploadToSheet(val);
+        // 倒序尋找最新的一筆有效數字
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const cleanStr = lines[i].trim();
+          if (!cleanStr) continue;
+
+          const val = parseFloat(cleanStr);
+          if (!isNaN(val)) {
+            // A. 畫面大數字即時跳動
+            const displayEl = document.getElementById("distVal");
+            displayEl.innerText = val.toFixed(1);
+            displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
+            
+            // 狀態列顯示接收到的原始值以供確認
+            status.innerText = `接收成功：${val.toFixed(1)} cm`;
+
+            // B. 控制每 1 秒寫入一次 Google 試算表
+            const now = Date.now();
+            if (now - lastUploadTime >= UPLOAD_INTERVAL) {
+              lastUploadTime = now;
+              uploadToSheet(val);
+            }
+            break;
           }
         }
       }
