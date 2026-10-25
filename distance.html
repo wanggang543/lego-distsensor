@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPIKE 即時測距看板</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0b0f19;
+      color: #ffffff;
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .container {
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+    }
+    #distVal {
+      font-size: min(45vw, 40vh);
+      font-weight: 900;
+      line-height: 1;
+      color: #00e676;
+      font-variant-numeric: tabular-nums;
+      transition: color 0.15s ease;
+    }
+    .unit {
+      font-size: min(12vw, 12vh);
+      font-weight: 700;
+      color: #64748b;
+      margin-left: 2vw;
+    }
+    #connectBtn {
+      position: absolute;
+      bottom: 8vh;
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 16px 36px;
+      font-size: 20px;
+      font-weight: bold;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
+    }
+    #statusText {
+      position: absolute;
+      top: 5vh;
+      font-size: 16px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="statusText">等待連線 SPIKE...</div>
+
+  <div class="container">
+    <span id="distVal">--.-</span>
+    <span class="unit">cm</span>
+  </div>
+
+  <button id="connectBtn" onclick="connectSpike()">連線 SPIKE 藍牙</button>
+
+  <script>
+    // ⚠️ 請填入第一步複製的 Google Apps Script 網址
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbyBcO3DwbDfPySPUc7Zf4WeF1T4mpT4N1MlfpChd10SOI3DMlCxQuyeqHDtCa9SQbqRpw/exec";
+
+    const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const NUS_TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+
+    let rxBuffer = "";
+    let lastUploadTime = 0;
+    const UPLOAD_INTERVAL = 1000; // 每 1 秒上傳一筆到 Google 試算表
+
+    async function connectSpike() {
+      const btn = document.getElementById("connectBtn");
+      const status = document.getElementById("statusText");
+
+      try {
+        status.innerText = "正在搜尋 SPIKE 主機...";
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [NUS_SERVICE_UUID] }]
+        });
+
+        status.innerText = "連線中...";
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+        const txChar = await service.getCharacteristic(NUS_TX_CHAR_UUID);
+
+        await txChar.startNotifications();
+        txChar.addEventListener("characteristicvaluechanged", handleData);
+
+        btn.style.display = "none";
+        status.innerText = "已連線！即時偵測中";
+
+        device.addEventListener("gattserverdisconnected", () => {
+          btn.style.display = "block";
+          btn.innerText = "重新連線 SPIKE";
+          status.innerText = "連線已中斷";
+          document.getElementById("distVal").innerText = "--.-";
+          document.getElementById("distVal").style.color = "#ffffff";
+        });
+
+      } catch (err) {
+        status.innerText = "連線失敗: " + err.message;
+        console.error(err);
+      }
+    }
+
+    function handleData(event) {
+      const text = new TextDecoder().decode(event.target.value);
+      rxBuffer += text;
+      const lines = rxBuffer.split("\n");
+
+      if (lines.length > 1) {
+        const val = parseFloat(lines[lines.length - 2].trim());
+        rxBuffer = lines[lines.length - 1];
+
+        if (!isNaN(val)) {
+          // 1. 畫面大字即時更新
+          const displayEl = document.getElementById("distVal");
+          displayEl.innerText = val.toFixed(1);
+          displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
+
+          // 2. 每秒送給 Google Apps Script 寫入試算表
+          const now = Date.now();
+          if (now - lastUploadTime >= UPLOAD_INTERVAL) {
+            lastUploadTime = now;
+            uploadToSheet(val);
+          }
+        }
+      }
+    }
+
+    function uploadToSheet(distance) {
+      fetch(GAS_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ distance: distance })
+      }).catch(err => console.error("上傳失敗", err));
+    }
+  </script>
+</body>
+</html>
