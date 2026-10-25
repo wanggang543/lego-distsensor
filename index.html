@@ -3,47 +3,47 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SPIKE 即時測距看板</title>
+  <title>SPIKE 即時測距看板 (診斷版)</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       width: 100%; height: 100%;
       background-color: #0b0f19; color: #ffffff;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      user-select: none; overflow: hidden;
+      user-select: none;
     }
     .app-wrapper {
       width: 100%; height: 100%;
       display: flex; flex-direction: column;
-      align-items: center; justify-content: space-evenly;
-      padding: 20px 10px;
+      align-items: center; justify-content: space-between;
+      padding: 15px;
     }
     #statusText {
-      font-size: clamp(14px, 2.5vw, 20px);
-      color: #38bdf8; text-align: center;
-      max-width: 90%; line-height: 1.4;
+      font-size: 16px; color: #38bdf8; text-align: center;
       font-family: monospace;
     }
     .display-container {
       display: flex; align-items: baseline; justify-content: center;
     }
     #distVal {
-      font-size: min(42vw, 36vh); font-weight: 900; line-height: 1;
+      font-size: min(35vw, 28vh); font-weight: 900; line-height: 1;
       color: #00e676; font-variant-numeric: tabular-nums;
-      transition: color 0.1s ease;
     }
-    .unit {
-      font-size: min(10vw, 10vh); font-weight: 700;
-      color: #64748b; margin-left: 15px;
-    }
+    .unit { font-size: min(8vw, 8vh); font-weight: 700; color: #64748b; margin-left: 10px; }
     #connectBtn {
       background: #2563eb; color: #ffffff; border: 2px solid #3b82f6;
-      padding: 16px 42px; font-size: clamp(18px, 3vw, 24px);
-      font-weight: bold; border-radius: 50px; cursor: pointer;
-      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
-      transition: transform 0.1s ease, background 0.2s ease;
+      padding: 12px 30px; font-size: 18px; font-weight: bold;
+      border-radius: 40px; cursor: pointer;
     }
-    #connectBtn:active { transform: scale(0.96); background: #1d4ed8; }
+    /* 訊號診斷黑盒子 */
+    #monitorBox {
+      width: 95%; max-width: 600px; height: 130px;
+      background: #111827; border: 1px solid #374151;
+      border-radius: 8px; padding: 10px; font-family: monospace;
+      font-size: 13px; color: #a7f3d0; overflow-y: auto;
+      text-align: left;
+    }
+    .log-item { border-bottom: 1px solid #1f2937; padding: 2px 0; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -56,6 +56,11 @@
       <span class="unit">cm</span>
     </div>
 
+    <!-- 即時字串監聽窗 -->
+    <div id="monitorBox">
+      <div style="color: #9ca3af;">[監聽狀態] 尚未接收到任何字串或封包...</div>
+    </div>
+
     <button id="connectBtn" type="button" onclick="handleConnectClick()">連線 SPIKE 藍牙</button>
   </div>
 
@@ -65,14 +70,22 @@
 
     let bluetoothDevice = null;
     let rxBuffer = "";
+    let packetCount = 0;
+
+    function addLog(text) {
+      const box = document.getElementById("monitorBox");
+      const item = document.createElement("div");
+      item.className = "log-item";
+      item.innerText = `[#${packetCount}] 收到：${text}`;
+      box.insertBefore(item, box.firstChild);
+      if (box.children.length > 25) box.removeChild(box.lastChild);
+    }
 
     async function handleConnectClick() {
       const status = document.getElementById("statusText");
 
-      // 檢查瀏覽器與環境是否支援 Web Bluetooth
       if (!navigator.bluetooth) {
-        alert("目前瀏覽器或連線環境不支援 Web Bluetooth！\n\n1. 請確認網址開頭是 https:// 而非 http://\n2. 請使用 Chrome 或 Edge 瀏覽器（勿使用無痕視窗）");
-        status.innerText = "❌ 環境不支援藍牙 API（請檢查 HTTPS）";
+        alert("瀏覽器未支援 Web Bluetooth，請使用 HTTPS 與 Chrome/Edge/Bluefy");
         return;
       }
 
@@ -85,11 +98,10 @@
         });
 
         status.innerText = `連接中：${bluetoothDevice.name || "Hub"}...`;
-
         bluetoothDevice.addEventListener("gattserverdisconnected", onDisconnected);
 
         const server = await bluetoothDevice.gatt.connect();
-        status.innerText = "連線成功，正在掛載 UART 輸出通道...";
+        status.innerText = "連線成功，正在掛載 UART 通道...";
 
         const service = await server.getPrimaryService(NUS_SERVICE_UUID);
         const txChar = await service.getCharacteristic(NUS_TX_CHAR_UUID);
@@ -97,15 +109,15 @@
         await txChar.startNotifications();
         txChar.addEventListener("characteristicvaluechanged", handleUartData);
 
-        status.innerText = "✅ UART 通道已就緒！請按一下 Hub 中央鍵啟動測距";
+        status.innerText = "✅ 監聽已就緒！請按一下 Hub 中央鍵啟動測距";
         const btn = document.getElementById("connectBtn");
-        btn.innerText = "已連線 (即時接收中)";
+        btn.innerText = "已連線 (監聽中)";
         btn.style.background = "#10b981";
         btn.style.borderColor = "#059669";
 
       } catch (err) {
-        status.innerText = "連線取消或失敗: " + err.message;
-        console.error("連線錯誤詳情：", err);
+        status.innerText = "連線失敗: " + err.message;
+        console.error("連線錯誤：", err);
       }
     }
 
@@ -121,12 +133,19 @@
     }
 
     function handleUartData(event) {
+      packetCount++;
       const value = event.target.value;
       if (value.byteLength < 1) return;
 
-      const decoded = new TextDecoder("utf-8").decode(value);
-      rxBuffer += decoded;
+      // 1. 純文字解碼
+      const textChunk = new TextDecoder("utf-8").decode(value);
+      rxBuffer += textChunk;
 
+      // 2. 將原始收到的文字直接印在監聽黑盒子中 (將換行符號視覺化顯示)
+      const visibleChunk = textChunk.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+      addLog(`"${visibleChunk}"`);
+
+      // 3. 數值解析邏輯
       if (rxBuffer.includes("\n")) {
         const lines = rxBuffer.split(/\r?\n/);
         rxBuffer = lines.pop();
@@ -142,7 +161,7 @@
               const displayEl = document.getElementById("distVal");
               displayEl.innerText = val.toFixed(1);
               displayEl.style.color = (val <= 10) ? "#ff5252" : "#00e676";
-              document.getElementById("statusText").innerText = `⚡ 即時數值：${val.toFixed(1)} cm`;
+              document.getElementById("statusText").innerText = `⚡ 即時數值：${val.toFixed(1)} cm (總封包: ${packetCount})`;
               break;
             }
           }
