@@ -398,7 +398,7 @@
       await characteristic.startNotifications();
       rxBuffer = '';
       setConnected(true, device.name || 'Hub');
-      resetDisplay('等待資料…請確認 Hub 上的程式正在執行');
+      resetDisplay('連線成功，請按下Hub的圓形按鍵');
       keepAwake(true);
     } catch (e) {
       if (e.name !== 'NotFoundError') {
