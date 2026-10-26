@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SPIKE 距離偵測儀</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f4ee;
+    --panel: #ffffff;
+    --ink: #1c2430;
+    --muted: #6b7482;
+    --line: #dcd8cc;
+    --safe: #2f9e63;
+    --slow: #e6a700;
+    --fast: #e8702a;
+    --stop: #d8363a;
+    --idle: #9aa3b0;
+    --accent: var(--idle);
+    --num: "Rubik", "Noto Sans TC", system-ui, sans-serif;
+    --txt: "Noto Sans TC", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --topbar-h: 132px; /* 頂部工具列的大約高度，用來計算第一屏高度 */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181f; --panel: #1d232d; --ink: #eef1f5; --muted: #97a1b0; --line: #323a47;
+      --safe: #4cc38a; --slow: #f2bb2e; --fast: #f28a4b; --stop: #ef5a5e; --idle: #6f7886;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--txt); line-height: 1.6; min-height: 100vh;
+  }
+
+  /* ---------- 頂部工具列：按鍵固定在最上方 ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+  }
+  .topbar-inner { max-width: 1000px; margin: 0 auto; display: grid; gap: 10px; }
+  .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: clamp(1.05rem, 2.4vw, 1.4rem); font-weight: 700; margin: 0; letter-spacing: .02em; }
+  .conn { display: flex; align-items: center; gap: 10px; font-size: .95rem; color: var(--muted); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--idle); flex: none; }
+  .conn.on .dot { background: var(--safe); }
+  .actions { display: flex; gap: 10px; }
+  .actions button { flex: 1 1 0; }
+  .err { color: var(--stop); font-size: .9rem; margin: 0; }
+  .err:empty { display: none; }
+
+  button {
+    font: inherit; font-weight: 700; min-height: 48px;
+    border-radius: 12px; border: 1px solid var(--ink);
+    padding: 10px 16px; cursor: pointer;
+    background: var(--ink); color: var(--bg);
+    touch-action: manipulation; white-space: nowrap;
+  }
+  button.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  button:hover { filter: brightness(1.12); }
+  button:focus-visible { outline: 3px solid var(--slow); outline-offset: 2px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ---------- 內容 ---------- */
+  main {
+    max-width: 1000px; margin: 0 auto;
+    padding: 18px max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    display: grid; gap: 22px;
+  }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 26px 24px; }
+
+  /* 第一屏：只顯示偵測狀況，撐滿整個畫面 */
+  .reading {
+    text-align: center;
+    min-height: calc(100vh - var(--topbar-h) - 36px);
+    min-height: calc(100svh - var(--topbar-h) - 36px);
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .value {
+    font-family: var(--num); font-weight: 900;
+    font-size: clamp(5rem, 24vmin, 13rem);
+    line-height: 1; letter-spacing: -.03em; white-space: nowrap;
+    color: var(--accent); font-variant-numeric: tabular-nums;
+    transition: color .25s;
+  }
+  .value small { font-size: .26em; font-weight: 700; margin-left: .15em; letter-spacing: 0; color: var(--muted); }
+  .state { margin-top: 12px; font-size: clamp(1.2rem, 3.4vmin, 2rem); font-weight: 700; color: var(--accent); transition: color .25s; min-height: 1.7em; }
+  .sub { color: var(--muted); font-size: .95rem; min-height: 1.4em; }
+
+  /* 等比例尺規 */
+  .ruler { margin-top: 36px; position: relative; padding-top: 30px; }
+  .bar { display: flex; height: clamp(26px, 4vmin, 40px); border-radius: 6px; overflow: hidden; }
+  .bar span { display: block; height: 100%; }
+  .z-stop { background: var(--stop); }
+  .z-fast { background: var(--fast); }
+  .z-slow { background: var(--slow); }
+  .z-safe { background: var(--safe); opacity: .85; }
+  .ticks { position: relative; height: 26px; margin-top: 5px; font-size: clamp(.8rem, 2vmin, 1.05rem); color: var(--muted); font-family: var(--num); }
+  .ticks i { position: absolute; transform: translateX(-50%); font-style: normal; white-space: nowrap; }
+  .ticks i::before { content: ""; position: absolute; left: 50%; top: -6px; width: 1px; height: 5px; background: var(--muted); }
+  .ticks i:first-child { transform: none; }
+  .ticks i:first-child::before { left: 0; }
+  .ticks i:last-child { transform: translateX(-100%); }
+  .ticks i:last-child::before { left: 100%; }
+  .marker { position: absolute; top: 0; left: 0; width: 0; height: 0; transition: left .35s cubic-bezier(.2,.8,.2,1), opacity .2s; }
+  .marker::before { content: ""; position: absolute; left: -10px; top: 6px; border: 10px solid transparent; border-top: 16px solid var(--ink); border-bottom: 0; }
+  .marker::after  { content: ""; position: absolute; left: -1px; top: 22px; width: 2px; height: calc(clamp(26px, 4vmin, 40px) + 14px); background: var(--ink); }
+  .marker.off { opacity: 0; }
+
+  .scroll-hint { margin-top: 28px; color: var(--muted); font-size: .9rem; }
+  .scroll-hint span { display: inline-block; animation: bob 1.8s ease-in-out infinite; }
+  @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
+
+  /* 紀錄區（往下滑才看得到） */
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; font-size: .95rem; color: var(--muted); flex-wrap: wrap; gap: 4px 12px; }
+  .chart-head h2 { margin: 0; font-size: 1.05rem; color: var(--ink); }
+  .chart-head b { color: var(--ink); font-weight: 700; }
+  canvas { width: 100%; height: clamp(220px, 34vh, 360px); display: block; }
+
+  .note { color: var(--muted); font-size: .9rem; }
+  .note ol, .note ul { margin: 6px 0 0; padding-left: 1.3em; }
+  details summary { cursor: pointer; font-weight: 700; font-size: 1rem; padding: 6px 0; }
+  details[open] summary { margin-bottom: 8px; }
+
+  @media (max-width: 520px) {
+    .panel { padding: 20px 14px; }
+    button { padding: 10px 8px; font-size: .95rem; }
+    :root { --topbar-h: 150px; }
+  }
+  @media (orientation: landscape) and (max-height: 520px) {
+    .value { font-size: clamp(3.5rem, 22vmin, 6rem); }
+    .ruler { margin-top: 18px; }
+    .scroll-hint { margin-top: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .marker, .value, .state, .scroll-hint span { transition: none; animation: none; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="title-row">
+      <h1>SPIKE 距離偵測儀</h1>
+      <div class="conn" id="conn"><span class="dot"></span><span id="connText">尚未連線</span></div>
+    </div>
+    <div class="actions">
+      <button id="btnConnect">連接 Hub</button>
+      <button id="btnDisconnect" class="ghost" disabled>中斷連線</button>
+      <button id="btnDemo" class="ghost">模擬資料</button>
+    </div>
+    <p class="err" id="err" role="alert"></p>
+  </div>
+</div>
+
+<main>
+  <section class="panel reading" aria-live="polite">
+    <div class="value" id="value">--<small>cm</small></div>
+    <div class="state" id="state">請先連接 Hub</div>
+    <div class="sub" id="sub"></div>
+
+    <div class="ruler">
+      <div class="marker off" id="marker"></div>
+      <div class="bar" id="bar" aria-hidden="true"></div>
+      <div class="ticks" id="ticks" aria-hidden="true"></div>
+    </div>
+    <div class="scroll-hint"><span>↓</span> 往下滑查看紀錄</div>
+  </section>
+
+  <section class="panel">
+    <div class="chart-head">
+      <h2>距離紀錄（最近 60 秒）</h2>
+      <span>最小 <b id="min">--</b> cm　最大 <b id="max">--</b> cm</span>
+    </div>
+    <canvas id="chart" aria-label="距離變化曲線"></canvas>
+  </section>
+
+  <section class="panel note">
+    <details>
+      <summary>使用方式</summary>
+      <ol>
+        <li>用 Pybricks Code 把程式下載到 Hub，並關閉 Pybricks Code 的藍牙連線（藍牙同時只能連一個裝置）。</li>
+        <li>按 Hub 的藍牙按鈕啟動程式，等待燈號閃爍藍色。</li>
+        <li>在本頁按「連接 Hub」，選擇你的 Hub。</li>
+      </ol>
+      <ul>
+        <li>電腦／Android：使用 Chrome 或 Edge，並透過 https 開啟（GitHub Pages 已符合）。</li>
+        <li>iPad／iPhone：Safari 與 Chrome 都不支援 Web Bluetooth，請安裝 App Store 的 <b>Bluefy</b> 瀏覽器，用它開啟本頁。</li>
+        <li>頁面載入後即使關閉 Wi‑Fi，藍牙資料仍會持續更新。</li>
+      </ul>
+    </details>
+  </section>
+</main>
+
+<script>
+(() => {
+  // Pybricks BLE 服務
+  const PYBRICKS_SERVICE = 'c5f50001-8280-46da-89f4-6d8051e4aeef';
+  const PYBRICKS_CHAR    = 'c5f50002-8280-46da-89f4-6d8051e4aeef';
+  const EVT_STDOUT = 0x01;
+
+  const MAX_CM = 200;       // 尺規最大值（等比例）。想看更細可改成 100
+  const TICKS  = [0, 20, 50, 100, 150, 200];
+  const OUT_OF_RANGE = 900; // 程式在無讀數時回傳 999
+  const HISTORY_SEC = 60;
+  const STALE_MS = 3000;
+
+  const pos = cm => Math.max(0, Math.min(cm, MAX_CM)) / MAX_CM; // 0~1，等比例
+
+  const $ = id => document.getElementById(id);
+  const el = {
+    value: $('value'), state: $('state'), sub: $('sub'), marker: $('marker'),
+    conn: $('conn'), connText: $('connText'), err: $('err'),
+    min: $('min'), max: $('max'), canvas: $('chart'), bar: $('bar'), ticks: $('ticks'),
+    btnConnect: $('btnConnect'), btnDisconnect: $('btnDisconnect'), btnDemo: $('btnDemo')
+  };
+
+  let device = null, characteristic = null, rxBuffer = '';
+  let history = [];
+  let lastDataAt = 0;
+  let demoTimer = null;
+  let wakeLock = null;
+  const decoder = new TextDecoder();
+
+  const zones = [
+    { max: 5,        cls: '--stop', bar: 'z-stop', text: '太近了！持續長音' },
+    { max: 10,       cls: '--fast', bar: 'z-fast', text: '接近中：快速嗶聲' },
+    { max: 20,       cls: '--slow', bar: 'z-slow', text: '注意：慢速嗶聲' },
+    { max: Infinity, cls: '--safe', bar: 'z-safe', text: '安全距離' }
+  ];
+
+  (function buildRuler() {
+    let prev = 0;
+    zones.forEach(z => {
+      const end = isFinite(z.max) ? z.max : MAX_CM;
+      const span = document.createElement('span');
+      span.className = z.bar;
+      span.style.width = ((pos(end) - pos(prev)) * 100) + '%';
+      el.bar.appendChild(span);
+      prev = end;
+    });
+    TICKS.forEach(v => {
+      const i = document.createElement('i');
+      i.style.left = (pos(v) * 100) + '%';
+      i.textContent = v === MAX_CM ? v + ' cm' : v;
+      el.ticks.appendChild(i);
+    });
+  })();
+
+  function setAccent(cssVar) { document.documentElement.style.setProperty('--accent', `var(${cssVar})`); }
+
+  function showReading(cm) {
+    lastDataAt = performance.now();
+    if (cm >= OUT_OF_RANGE) {
+      el.value.innerHTML = '--<small>cm</small>';
+      el.state.textContent = '超出偵測範圍';
+      el.sub.textContent = '感測器沒有讀到物體';
+      setAccent('--idle');
+      el.marker.classList.add('off');
+    } else {
+      el.value.innerHTML = cm.toFixed(1) + '<small>cm</small>';
+      const z = zones.find(z => cm <= z.max);
+      el.state.textContent = z.text;
+      el.sub.textContent = '';
+      setAccent(z.cls);
+      el.marker.classList.remove('off');
+      el.marker.style.left = (pos(cm) * 100) + '%';
+      history.push({ t: lastDataAt, v: cm });
+    }
+    trimHistory(); drawChart(); updateMinMax();
+  }
+
+  function trimHistory() {
+    const cutoff = performance.now() - HISTORY_SEC * 1000;
+    while (history.length && history[0].t < cutoff) history.shift();
+  }
+
+  function updateMinMax() {
+    if (!history.length) { el.min.textContent = el.max.textContent = '--'; return; }
+    const vs = history.map(h => h.v);
+    el.min.textContent = Math.min(...vs).toFixed(1);
+    el.max.textContent = Math.max(...vs).toFixed(1);
+  }
+
+  /* ---------- 圖表 ---------- */
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function drawChart() {
+    const c = el.canvas;
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    const padL = 36, padR = 8, padT = 10, padB = 10;
+    const pw = w - padL - padR, ph = h - padT - padB;
+    const y = v => padT + ph - pos(v) * ph;
+
+    g.font = '12px Rubik, sans-serif';
+    g.textBaseline = 'middle';
+    const muted = cssVar('--muted'), lineCol = cssVar('--line');
+
+    // 警示線：5 / 10 / 20 cm（只標示 20，避免文字重疊）
+    [[5, '--stop'], [10, '--fast'], [20, '--slow']].forEach(([v, col]) => {
+      g.strokeStyle = cssVar(col); g.globalAlpha = .6; g.setLineDash([4, 4]);
+      g.beginPath(); g.moveTo(padL, y(v)); g.lineTo(w - padR, y(v)); g.stroke();
+      g.globalAlpha = 1; g.setLineDash([]);
+      if (v === 20) { g.fillStyle = muted; g.fillText(v, 2, y(v)); }
+    });
+    // 刻度線
+    TICKS.forEach(v => {
+      if (v === 20) return;
+      g.strokeStyle = lineCol;
+      g.beginPath(); g.moveTo(padL, y(v)); g.lineTo(w - padR, y(v)); g.stroke();
+      g.fillStyle = muted;
+      g.fillText(String(v), 2, v === 0 ? y(v) - 2 : (v === MAX_CM ? y(v) + 6 : y(v)));
+    });
+
+    if (history.length < 2) return;
+    const now = performance.now();
+    const x = t => padL + pw - (now - t) / (HISTORY_SEC * 1000) * pw;
+
+    g.strokeStyle = cssVar('--ink'); g.lineWidth = 2.5; g.lineJoin = 'round';
+    g.beginPath();
+    history.forEach((p, i) => i ? g.lineTo(x(p.t), y(p.v)) : g.moveTo(x(p.t), y(p.v)));
+    g.stroke();
+    const last = history[history.length - 1];
+    g.fillStyle = cssVar('--ink');
+    g.beginPath(); g.arc(x(last.t), y(last.v), 4.5, 0, Math.PI * 2); g.fill();
+  }
+
+  /* ---------- 螢幕常亮（展示用，不支援時略過） ---------- */
+  async function keepAwake(on) {
+    try {
+      if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+      else if (wakeLock) { await wakeLock.release(); wakeLock = null; }
+    } catch (e) { /* 忽略 */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && (demoTimer || (device && device.gatt && device.gatt.connected))) keepAwake(true);
+  });
+
+  /* ---------- 藍牙 ---------- */
+  function setConnected(on, name) {
+    el.conn.classList.toggle('on', on);
+    el.connText.textContent = on ? `已連線：${name}` : (demoTimer ? '模擬資料中' : '尚未連線');
+    el.btnConnect.disabled = on || !!demoTimer;
+    el.btnDisconnect.disabled = !on && !demoTimer;
+    el.btnDemo.textContent = demoTimer ? '停止模擬' : '模擬資料';
+    el.btnDemo.disabled = on;
+  }
+
+  function resetDisplay(msg) {
+    el.value.innerHTML = '--<small>cm</small>';
+    el.state.textContent = msg;
+    el.sub.textContent = '';
+    setAccent('--idle');
+    el.marker.classList.add('off');
+  }
+
+  function handleNotification(event) {
+    const dv = event.target.value;
+    if (dv.getUint8(0) !== EVT_STDOUT) return;
+    rxBuffer += decoder.decode(new Uint8Array(dv.buffer, dv.byteOffset + 1, dv.byteLength - 1));
+    let idx;
+    while ((idx = rxBuffer.indexOf('\n')) >= 0) {
+      const lineText = rxBuffer.slice(0, idx).trim();
+      rxBuffer = rxBuffer.slice(idx + 1);
+      if (/^-?\d+(\.\d+)?$/.test(lineText)) showReading(parseFloat(lineText));
+    }
+  }
+
+  async function connect() {
+    el.err.textContent = '';
+    if (!navigator.bluetooth) {
+      el.err.textContent = '這個瀏覽器不支援 Web Bluetooth。電腦請用 Chrome／Edge；iPad 請改用 Bluefy 瀏覽器。';
+      return;
+    }
+    try {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [PYBRICKS_SERVICE] }],
+        optionalServices: [PYBRICKS_SERVICE]
+      });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+      el.connText.textContent = '連線中…';
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(PYBRICKS_SERVICE);
+      characteristic = await service.getCharacteristic(PYBRICKS_CHAR);
+      characteristic.addEventListener('characteristicvaluechanged', handleNotification);
+      await characteristic.startNotifications();
+      rxBuffer = '';
+      setConnected(true, device.name || 'Hub');
+      resetDisplay('等待資料…請確認 Hub 上的程式正在執行');
+      keepAwake(true);
+    } catch (e) {
+      if (e.name !== 'NotFoundError') {
+        el.err.textContent = '連線失敗：' + e.message + '（請確認 Pybricks Code 已中斷連線）';
+      }
+      setConnected(false);
+    }
+  }
+
+  function onDisconnected() {
+    characteristic = null;
+    setConnected(false);
+    resetDisplay('連線已中斷');
+    el.err.textContent = '與 Hub 的連線已中斷，可再按「連接 Hub」重新連線。';
+    keepAwake(false);
+  }
+
+  function disconnect() {
+    if (demoTimer) return toggleDemo();
+    if (device && device.gatt.connected) device.gatt.disconnect();
+  }
+
+  /* ---------- 模擬資料 ---------- */
+  function toggleDemo() {
+    if (demoTimer) {
+      clearInterval(demoTimer); demoTimer = null;
+      setConnected(false); resetDisplay('請先連接 Hub'); keepAwake(false);
+      return;
+    }
+    el.err.textContent = '';
+    let t = 0;
+    demoTimer = setInterval(() => {
+      t += 0.1;
+      const v = 50 + 48 * Math.sin(t) * Math.abs(Math.sin(t * 0.4)) + 8 * Math.sin(t * 2.7);
+      showReading(Math.max(1.5, v));
+    }, 500);
+    setConnected(false);
+    keepAwake(true);
+  }
+
+  el.btnConnect.addEventListener('click', connect);
+  el.btnDisconnect.addEventListener('click', disconnect);
+  el.btnDemo.addEventListener('click', toggleDemo);
+  window.addEventListener('resize', drawChart);
+  window.addEventListener('orientationchange', () => setTimeout(drawChart, 250));
+
+  setInterval(() => {
+    trimHistory(); drawChart();
+    const live = (device && device.gatt && device.gatt.connected) || demoTimer;
+    if (live && lastDataAt && performance.now() - lastDataAt > STALE_MS) {
+      el.sub.textContent = '超過 3 秒沒有收到新資料，請確認程式仍在執行';
+    }
+  }, 1000);
+
+  drawChart();
+})();
+</script>
+</body>
+</html>
